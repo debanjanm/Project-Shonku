@@ -1,0 +1,16 @@
+fastapi
+uvicorn[standard]
+streamlit
+langchain
+langchain-openai
+langchain-community
+langchain-huggingface
+langchain-text-splitters
+deepagents
+faiss-cpu
+sentence-transformers
+python-dotenv
+requests
+pyyaml
+pypdf
+docx2txt
