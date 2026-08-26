@@ -24,7 +24,7 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from backend.kb import KnowledgeBase, KB_DATA_DIR, list_knowledge_bases
 from backend.logging_config import configure_logging
 from backend.offline_pipeline.loaders import SUPPORTED_EXTENSIONS, load_source_file
-from backend.retrieval import INDEX_DIR, get_embeddings, load_index_or_none, save_index
+from backend.retrieval import INDEX_DIR, get_embeddings, load_index_or_none, save_bm25, save_index
 from langchain_community.vectorstores import FAISS
 
 logger = logging.getLogger(__name__)
@@ -69,6 +69,12 @@ def _split_file(kb: KnowledgeBase, relpath: str, path: Path) -> tuple[list[Docum
                 "doc_title": path.stem,
             }
         )
+        # Prefix the embedded text with the document title so a chunk's own
+        # embedding carries its document identity (e.g. "2026 Q1 AAPL") even
+        # when the chunk's prose never restates it — otherwise exact-document
+        # queries ("Apple Q1 2026 revenue") can lose to chunks that happen to
+        # discuss the topic more verbosely but belong to the wrong filing.
+        chunk.page_content = f"[{path.stem}]\n{chunk.page_content}"
     return chunks, ids
 
 
@@ -134,6 +140,13 @@ def ingest_kb(kb: KnowledgeBase, *, rebuild: bool = False) -> None:
         return
 
     save_index(kb.slug, index)
+    # BM25 has no incremental add/delete API, so it's always rebuilt in full
+    # from the FAISS docstore (cheap: pure term-frequency stats, no embedding
+    # calls) — this also means a plain (non --rebuild) ingest run backfills
+    # bm25.pkl for any KB that predates hybrid search.
+    all_docs = list(index.docstore._dict.values())
+    all_ids = list(index.docstore._dict.keys())
+    save_bm25(kb.slug, all_docs, all_ids)
     _save_manifest(index_dir, manifest)
     logger.info(
         "[%s] new=%d changed=%d removed=%d unchanged=%d -> %d chunks",

@@ -14,3 +14,15 @@ requests
 pyyaml
 pypdf
 docx2txt
+pandas
+scikit-learn
+matplotlib
+seaborn
+rank-bm25
+chromadb
+open-clip-torch
+torch
+Pillow
+huggingface_hub
+arxiv
+neo4j

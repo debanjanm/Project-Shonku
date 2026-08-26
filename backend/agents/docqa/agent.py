@@ -9,16 +9,22 @@ from langchain_core.messages import HumanMessage
 from langchain_core.tools import tool
 from langchain_openai import ChatOpenAI
 
+from backend.agents.docqa.router import choose_model
 from backend.config import get_router_config
-from backend.online_pipeline.router import choose_model
 from backend.retrieval import search
 
 logger = logging.getLogger(__name__)
 
-SYSTEM_PROMPT = """You are the Project Shonku chat assistant. Answer the user's question using ONLY the
+_BASE_SYSTEM_PROMPT = """You are the Project Shonku chat assistant. Answer the user's question using ONLY the
 `search_knowledge_base` tool's results as your source of truth for the currently selected knowledge base.
 
-Always call `search_knowledge_base` with the user's question first — do not ask a clarifying question before
+Before searching, look at the conversation history. If the latest question is a follow-up that relies on
+earlier context — pronouns ("it", "that", "them"), implied subjects ("what about remote workers?", "and for
+Q2?"), or comparisons to something asked before — rewrite it into a self-contained query that names the
+actual subject explicitly, then search with THAT rewritten query. Do not search with a pronoun or an
+elliptical fragment that only makes sense next to the prior turn.
+
+Always call `search_knowledge_base` with the (possibly rewritten) question first — do not ask a clarifying question before
 searching, and do not assume the knowledge base is ambiguous just because the question alone could be. After
 reviewing the results, ask ONE concise follow-up question only if the results themselves are genuinely
 ambiguous — e.g. they span multiple distinct companies, documents, or time periods that could each answer
@@ -59,8 +65,9 @@ def route_model(request: ModelRequest, handler) -> ModelResponse:
     return handler(request.override(model=model))
 
 
-def make_kb_agent(kb_slug: str):
+def make_kb_agent(kb_slug: str, memory_context: str = ""):
     logger.info("building deep agent kb_slug=%s", kb_slug)
+    system_prompt = _BASE_SYSTEM_PROMPT + (f"\n\n{memory_context}" if memory_context else "")
 
     @tool
     def search_knowledge_base(query: str) -> str:
@@ -79,6 +86,6 @@ def make_kb_agent(kb_slug: str):
     return create_deep_agent(
         model=get_model(get_router_config().easy_model),  # default; route_model overrides per call
         tools=[search_knowledge_base],
-        system_prompt=SYSTEM_PROMPT,
+        system_prompt=system_prompt,
         middleware=[route_model],
     )

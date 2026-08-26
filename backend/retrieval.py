@@ -1,23 +1,29 @@
-"""Build and query per-KB FAISS indexes.
+"""Build and query per-KB hybrid (BM25 + FAISS) indexes.
 
 Embeddings run locally (sentence-transformers) so retrieval needs no API key.
 """
 
 import logging
+import pickle
+import re
 import time
 from pathlib import Path
 
 from langchain_community.vectorstores import FAISS
 from langchain_core.documents import Document
 from langchain_huggingface import HuggingFaceEmbeddings
+from rank_bm25 import BM25Okapi
 
 logger = logging.getLogger(__name__)
 
 ROOT = Path(__file__).resolve().parent.parent
 INDEX_DIR = ROOT / "data" / "faiss_indexes"
+BM25_FILENAME = "bm25.pkl"
+RRF_K = 60  # standard Reciprocal Rank Fusion constant
 
 _embeddings: HuggingFaceEmbeddings | None = None
 _loaded_indexes: dict[str, FAISS] = {}
+_loaded_bm25: dict[str, dict | None] = {}
 
 
 def get_embeddings() -> HuggingFaceEmbeddings:
@@ -30,10 +36,34 @@ def get_embeddings() -> HuggingFaceEmbeddings:
     return _embeddings
 
 
+# Without stopword removal, BM25's raw term-frequency scoring lets a short
+# chunk that happens to repeat common words ("what", "was", "in") plus one
+# or two real query terms outscore a longer, genuinely relevant chunk — this
+# is standard IR practice, not optional polish (confirmed empirically: an
+# unrelated company's filing was outranking the correct one before this).
+_STOPWORDS = frozenset("""
+a an the of in on at to for with and or is was were be been being
+this that these those it its as by from what which who whom
+""".split())
+
+
+def tokenize(text: str) -> list[str]:
+    return [t for t in re.findall(r"\w+", text.lower()) if t not in _STOPWORDS]
+
+
 def save_index(kb_slug: str, index: FAISS) -> None:
     out_dir = INDEX_DIR / kb_slug
     out_dir.mkdir(parents=True, exist_ok=True)
     index.save_local(str(out_dir))
+
+
+def save_bm25(kb_slug: str, docs: list[Document], ids: list[str]) -> None:
+    out_dir = INDEX_DIR / kb_slug
+    out_dir.mkdir(parents=True, exist_ok=True)
+    bm25 = BM25Okapi([tokenize(doc.page_content) for doc in docs])
+    with open(out_dir / BM25_FILENAME, "wb") as f:
+        pickle.dump({"bm25": bm25, "docs": docs, "ids": ids}, f)
+    logger.info("saved bm25 index kb_slug=%s docs=%d", kb_slug, len(docs))
 
 
 def load_index_or_none(kb_slug: str) -> FAISS | None:
@@ -43,6 +73,18 @@ def load_index_or_none(kb_slug: str) -> FAISS | None:
     index = FAISS.load_local(str(idx_dir), get_embeddings(), allow_dangerous_deserialization=True)
     logger.debug("loaded index kb_slug=%s vectors=%d", kb_slug, index.index.ntotal)
     return index
+
+
+def load_bm25_or_none(kb_slug: str) -> dict | None:
+    if kb_slug not in _loaded_bm25:
+        path = INDEX_DIR / kb_slug / BM25_FILENAME
+        if path.exists():
+            with open(path, "rb") as f:
+                _loaded_bm25[kb_slug] = pickle.load(f)
+            logger.debug("loaded bm25 index kb_slug=%s", kb_slug)
+        else:
+            _loaded_bm25[kb_slug] = None
+    return _loaded_bm25[kb_slug]
 
 
 def load_index(kb_slug: str) -> FAISS:
@@ -55,13 +97,48 @@ def load_index(kb_slug: str) -> FAISS:
     return _loaded_indexes[kb_slug]
 
 
-def search(kb_slug: str, query: str, k: int = 4) -> list[Document]:
+def _rrf_merge(ranked_lists: list[list[Document]], k: int) -> list[Document]:
+    """Reciprocal Rank Fusion: combine several ranked result lists by rank
+    position only (1/(rank+RRF_K) per list), not raw score — avoids having to
+    normalize incomparable scales (FAISS distance vs. BM25 score)."""
+    scores: dict[str, float] = {}
+    doc_by_key: dict[str, Document] = {}
+    for ranked in ranked_lists:
+        for rank, doc in enumerate(ranked):
+            key = f"{doc.metadata.get('source')}:{doc.metadata.get('chunk_index')}"
+            scores[key] = scores.get(key, 0.0) + 1.0 / (rank + RRF_K)
+            doc_by_key.setdefault(key, doc)
+    ranked_keys = sorted(scores, key=lambda key: scores[key], reverse=True)
+    return [doc_by_key[key] for key in ranked_keys[:k]]
+
+
+def search(kb_slug: str, query: str, k: int = 6) -> list[Document]:
     logger.info("search kb_slug=%s k=%d query=%r", kb_slug, k, query)
     start = time.monotonic()
     index = load_index(kb_slug)
-    results = index.similarity_search(query, k=k)
+    bundle = load_bm25_or_none(kb_slug)
+
+    if bundle is None:
+        # Not yet re-ingested since hybrid search was added — fall back to
+        # plain dense search rather than erroring.
+        results = index.similarity_search(query, k=k)
+        logger.info(
+            "search kb_slug=%s (dense-only, no bm25 index) returned %d results in %.3fs",
+            kb_slug, len(results), time.monotonic() - start,
+        )
+        return results
+
+    fetch_k = max(k * 2, 12)
+    dense_results = index.similarity_search(query, k=fetch_k)
+
+    query_tokens = tokenize(query)
+    bm25_scores = bundle["bm25"].get_scores(query_tokens)
+    sparse_order = sorted(range(len(bm25_scores)), key=lambda i: bm25_scores[i], reverse=True)[:fetch_k]
+    sparse_results = [bundle["docs"][i] for i in sparse_order]
+
+    results = _rrf_merge([dense_results, sparse_results], k=k)
     logger.info(
-        "search kb_slug=%s returned %d results in %.3fs",
+        "search kb_slug=%s (hybrid) returned %d results in %.3fs",
         kb_slug, len(results), time.monotonic() - start,
     )
     return results

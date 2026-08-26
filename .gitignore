@@ -1,8 +1,16 @@
 data/faiss_indexes/
 data/raw/
+data/shonku.db
+data/uploads/
+data/charts/
+data/mysteries/
+data/chroma/
 __pycache__/
 *.pyc
 .env
+.env.*
 .venv/
 venv/
 *.pdf
+*.jpg
+data/
