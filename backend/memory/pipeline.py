@@ -1,10 +1,9 @@
 """Memory pipeline: extract facts, decide ADD/UPDATE/DELETE/SKIP, format for
 injection. Ported from AIF-Remembrane's pipeline/{extractor,updater,
-synthesizer}.py, collapsed into one file — same convention as
-backend/agents/data_analyst/sql_pipeline.py (multi-stage LLM pipeline, one
-file, not one-file-per-stage). Uses the same sync langchain_openai.ChatOpenAI
-client backend/agents/docqa/agent.py already uses for OpenRouter, called
-directly instead of through create_deep_agent.
+synthesizer}.py, collapsed into one file — a multi-stage LLM pipeline kept
+in one module rather than one-file-per-stage. Uses the same sync
+langchain_openai.ChatOpenAI client backend/agents/docqa/agent.py already
+uses for OpenRouter, called directly instead of through create_deep_agent.
 """
 
 import json

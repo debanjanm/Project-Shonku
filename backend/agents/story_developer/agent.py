@@ -2,7 +2,7 @@
 concept + key scene. Adapted from AIF-CineBot's Google ADK film-pitch
 pipeline, trimmed to writer + scene-director + editor (storyline/title/
 scenes only — no casting/cinematography/marketing) and reimplemented in
-deepagents to match this codebase's stack. Stateless, like docqa/data_analyst
+deepagents to match this codebase's stack. Stateless, like docqa
 — the "source" is just the user's own message, nothing to persist.
 """
 

@@ -28,7 +28,7 @@ class OperationType(str, Enum):
 @dataclass
 class MemoryScope:
     """Ownership/visibility scope of a memory. agent_id silos memory per
-    agent (a Data Analyst fact never surfaces in Story Developer) and IS
+    agent (a Document Q&A fact never surfaces in Story Developer) and IS
     used to filter retrieval. run_id tags a memory with the conversation it
     came from for provenance but is never used to filter retrieval — recall
     spans every conversation with the same agent, not just the one a fact

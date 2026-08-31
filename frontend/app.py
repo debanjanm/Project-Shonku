@@ -1,7 +1,7 @@
-"""Streamlit chat UI: pick an agent type, then its source (KB or dataset/CSV),
-then chat. DB (via backend) is the source of truth for conversation history,
-not session_state — survives a real browser refresh via conversation_id in
-the URL query string.
+"""Streamlit chat UI: pick an agent type, then its source (KB or none), then
+chat. DB (via backend) is the source of truth for conversation history, not
+session_state — survives a real browser refresh via conversation_id in the
+URL query string.
 """
 
 import json
@@ -27,13 +27,6 @@ def get_agents():
 @st.cache_data(ttl=60)
 def get_kbs():
     resp = requests.get(f"{BACKEND_URL}/kbs", timeout=10)
-    resp.raise_for_status()
-    return resp.json()
-
-
-@st.cache_data(ttl=60)
-def get_datasets():
-    resp = requests.get(f"{BACKEND_URL}/datasets", timeout=10)
     resp.raise_for_status()
     return resp.json()
 
@@ -67,26 +60,6 @@ def create_conversation(agent_type: str, source_type: str, source_ref: str):
     )
     resp.raise_for_status()
     return resp.json()
-
-
-def upload_csv(uploaded_file) -> str:
-    resp = requests.post(
-        f"{BACKEND_URL}/uploads",
-        files={"file": (uploaded_file.name, uploaded_file.getvalue(), "text/csv")},
-        timeout=30,
-    )
-    resp.raise_for_status()
-    return resp.json()["path"]
-
-
-def render_charts(content: str) -> None:
-    names = list(dict.fromkeys(re.findall(r"chart_[\w\-]+\.png", content)))
-    if not names:
-        return
-    cols = st.columns(min(len(names), 2))
-    for i, name in enumerate(names):
-        with cols[i % 2]:
-            st.image(f"{BACKEND_URL}/charts/{name}", use_container_width=True)
 
 
 def render_product_images(content: str) -> None:
@@ -133,32 +106,9 @@ with st.sidebar:
     elif agent_type == "recommendation":
         source_type, source_ref = "catalog", "fashion-500"
         st.caption("Searching a 425-item fashion product catalog.")
-    elif agent_type in ("story_developer", "mystery_generator"):
+    else:
         source_type, source_ref = "brief", "freeform"
         st.caption("No source to pick — just describe your idea in the chat.")
-    else:
-        st.header("Data Source")
-        source_choice = st.radio("Choose data source", ["Built-in dataset", "Upload CSV"])
-        if source_choice == "Built-in dataset":
-            datasets = get_datasets()
-            dataset_by_name = {d["name"]: d["description"] for d in datasets}
-            dataset_name = st.selectbox(
-                "Select dataset", list(dataset_by_name.keys()),
-                index=list(dataset_by_name.keys()).index(st.session_state.get("last_dataset", "titanic"))
-                if st.session_state.get("last_dataset", "titanic") in dataset_by_name else 0,
-                format_func=lambda x: dataset_by_name.get(x, x),
-            )
-            st.session_state.last_dataset = dataset_name
-            source_type, source_ref = "dataset", dataset_name
-        else:
-            uploaded_file = st.file_uploader("Upload a CSV file", type=["csv"])
-            if uploaded_file is not None:
-                st.session_state.uploaded_csv_path = upload_csv(uploaded_file)
-                st.success(f"Loaded: {uploaded_file.name}")
-            source_type = "csv"
-            source_ref = st.session_state.get("uploaded_csv_path")
-            if not source_ref:
-                st.info("Upload a CSV file to begin.")
 
     # Switching agent/source away from the loaded conversation leaves it
     # (a conversation stays locked to the agent+source it started with).
@@ -187,7 +137,6 @@ if active_conversation:
         with st.chat_message(msg["role"]):
             st.markdown(msg["content"])
             if msg["role"] == "assistant":
-                render_charts(msg["content"])
                 render_product_images(msg["content"])
 else:
     st.info("Start typing to begin a new chat, or pick one from the sidebar.")
@@ -208,7 +157,6 @@ if prompt:
     with st.chat_message("assistant"):
         placeholder = st.empty()
         full_text = ""
-        chart_names: list[str] = []
         product_image_names: list[str] = []
         with requests.post(
             f"{BACKEND_URL}/chat",
@@ -230,15 +178,8 @@ if prompt:
                 if "delta" in payload:
                     full_text += payload["delta"]
                     placeholder.markdown(full_text)
-                elif "chart_paths" in payload:
-                    chart_names = payload["chart_paths"]
                 elif "product_images" in payload:
                     product_image_names = payload["product_images"]
-        if chart_names:
-            cols = st.columns(min(len(chart_names), 2))
-            for i, name in enumerate(chart_names):
-                with cols[i % 2]:
-                    st.image(f"{BACKEND_URL}/charts/{name}", use_container_width=True)
         if product_image_names:
             cols = st.columns(min(len(product_image_names), 3))
             for i, name in enumerate(product_image_names):

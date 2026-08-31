@@ -1,5 +1,4 @@
-"""FastAPI backend: agents, KBs/datasets, conversations (SQLite-persisted),
-streamed chat, chart serving.
+"""FastAPI backend: agents, KBs, conversations (SQLite-persisted), streamed chat.
 """
 
 import json
@@ -10,7 +9,7 @@ import time
 from pathlib import Path
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from langchain_core.messages import AIMessageChunk
@@ -19,8 +18,6 @@ from pydantic import BaseModel
 load_dotenv(Path(__file__).resolve().parent.parent.parent / ".env")
 
 from backend import db  # noqa: E402
-from backend.agents.data_analyst.agent import make_data_analyst_agent  # noqa: E402
-from backend.agents.data_analyst.tools import BUILT_IN_DATASETS, CHARTS_DIR  # noqa: E402
 from backend.agents.docqa.agent import make_kb_agent  # noqa: E402
 from backend.agents.mystery_generator.agent import make_mystery_agent  # noqa: E402
 from backend.agents.recommendation.agent import make_recommendation_agent  # noqa: E402
@@ -45,8 +42,6 @@ except Exception:
     memory_manager = None
 
 ROOT = Path(__file__).resolve().parent.parent.parent
-UPLOAD_DIR = ROOT / "data" / "uploads"
-UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
 PRODUCT_IMAGES_DIR = ROOT / "data" / "products" / "images"
 
 RECOMMENDATION_SOURCE_TYPE = "catalog"
@@ -59,11 +54,6 @@ AGENTS = [
         "id": "docqa",
         "name": "Document Q&A",
         "description": "Chat with a curated knowledge base.",
-    },
-    {
-        "id": "data_analyst",
-        "name": "Data Analyst",
-        "description": "Analyze datasets: statistics, SQL, charts, and reports.",
     },
     {
         "id": "recommendation",
@@ -111,15 +101,6 @@ def _validate_source(agent_type: str, source_type: str, source_ref: str) -> None
             get_kb(source_ref)
         except KeyError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
-    elif agent_type == "data_analyst":
-        if source_type == "dataset":
-            if source_ref not in BUILT_IN_DATASETS:
-                raise HTTPException(status_code=404, detail=f"Unknown dataset: {source_ref}")
-        elif source_type == "csv":
-            if not Path(source_ref).exists():
-                raise HTTPException(status_code=404, detail=f"Uploaded file not found: {source_ref}")
-        else:
-            raise HTTPException(status_code=400, detail="data_analyst requires source_type='dataset' or 'csv'")
     elif agent_type == "recommendation":
         if source_type != RECOMMENDATION_SOURCE_TYPE or source_ref != RECOMMENDATION_SOURCE_REF:
             raise HTTPException(
@@ -134,15 +115,6 @@ def _validate_source(agent_type: str, source_type: str, source_ref: str) -> None
             )
     else:
         raise HTTPException(status_code=400, detail=f"Unknown agent_type: {agent_type}")
-
-
-def _extract_chart_filenames(text: str) -> list[str]:
-    found = []
-    for match in re.finditer(r"chart_[\w\-]+\.png", text):
-        name = match.group(0)
-        if (CHARTS_DIR / name).exists() and name not in found:
-            found.append(name)
-    return found
 
 
 def _extract_product_images(text: str) -> list[str]:
@@ -162,20 +134,6 @@ def list_agents():
 @app.get("/kbs")
 def list_kbs():
     return [{"slug": kb.slug, "name": kb.name, "description": kb.description} for kb in list_knowledge_bases()]
-
-
-@app.get("/datasets")
-def list_datasets():
-    return [{"name": name, "description": desc} for name, desc in BUILT_IN_DATASETS.items()]
-
-
-@app.post("/uploads")
-async def upload_csv(file: UploadFile = File(...)):
-    safe_name = Path(file.filename).name
-    dest = UPLOAD_DIR / safe_name
-    dest.write_bytes(await file.read())
-    logger.info("uploaded csv saved to %s", dest)
-    return {"path": str(dest)}
 
 
 @app.post("/conversations")
@@ -203,15 +161,6 @@ def get_conversation_messages(conversation_id: int):
     if db.get_conversation(conversation_id) is None:
         raise HTTPException(status_code=404, detail=f"Unknown conversation: {conversation_id}")
     return db.get_messages(conversation_id)
-
-
-@app.get("/charts/{filename}")
-def get_chart(filename: str):
-    safe_name = Path(filename).name
-    path = CHARTS_DIR / safe_name
-    if not path.exists():
-        raise HTTPException(status_code=404, detail=f"Unknown chart: {filename}")
-    return FileResponse(path, media_type="image/png")
 
 
 @app.get("/products/images/{filename}")
@@ -263,7 +212,7 @@ def chat(req: ChatRequest):
     elif agent_type == "mystery_generator":
         agent = make_mystery_agent(req.conversation_id, memory_context=memory_context)
     else:
-        agent = make_data_analyst_agent(source_type, source_ref, memory_context=memory_context)
+        raise HTTPException(status_code=400, detail=f"Unknown agent_type: {agent_type}")
 
     def event_stream():
         start = time.monotonic()
@@ -289,10 +238,6 @@ def chat(req: ChatRequest):
                         args=(req.message, full_text, memory_scope),
                         daemon=True,
                     ).start()
-            if agent_type == "data_analyst" and full_text:
-                chart_files = _extract_chart_filenames(full_text)
-                if chart_files:
-                    yield f"data: {json.dumps({'chart_paths': chart_files})}\n\n"
             if agent_type == "recommendation" and full_text:
                 product_images = _extract_product_images(full_text)
                 if product_images:

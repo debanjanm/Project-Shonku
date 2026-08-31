@@ -3,7 +3,7 @@ CLIP embedding -> ChromaDB vector search -> LLM reranking) as a single tool.
 
 Ported from AIB-RecommendationAgent's services/search_pipeline.py, collapsed
 into one tool function (text-only for v1 — image-upload search deferred) so
-this agent stays a normal deepagents-compiled graph like docqa/data_analyst,
+this agent stays a normal deepagents-compiled graph like every other agent,
 instead of adding a non-agentic branch to /chat's streaming loop.
 """
 

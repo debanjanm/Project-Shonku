@@ -2,26 +2,23 @@
 
 AI application platform, not a single chatbot. Users pick an **agent**
 first, then that agent's **source** — a curated Knowledge Base for
-Document Q&A, a built-in dataset / uploaded CSV for the Data Analyst,
-nothing (fixed catalog) for Product Recommendations, or nothing (the
-user's own message is the source) for Story Developer and Mystery
-Generator.
+Document Q&A, nothing (fixed catalog) for Product Recommendations, or
+nothing (the user's own message is the source) for Story Developer and
+Mystery Generator.
 
 MVP v1 stack: `deepagents` (LangGraph) agents, OpenRouter for generation,
 FastAPI backend, Streamlit frontend. Document Q&A uses hybrid retrieval —
 FAISS (local, file-based dense/semantic search) + BM25 (sparse/keyword),
 merged via Reciprocal Rank Fusion — with local sentence-transformers
-embeddings. Data Analyst uses pandas/SQL/matplotlib/seaborn tools across
-4 subagents (analysis, SQL, viz, report-writing). Product Recommendations
-wraps a CLIP + ChromaDB + LLM-reranking search pipeline as a single tool
-so it fits the same agent shape as the others. Story Developer expands a
-one-line idea into a title/synopsis/characters/scene. Mystery Generator
-builds a crime case you have to solve — the solution lives in a hidden
-per-conversation file the agent writes but never quotes back until you
-guess or give up. Conversations for all five agents persist in a local
-SQLite file (`data/shonku.db`) — a chat survives a page refresh or a
-server restart, and each conversation is locked to the agent+source it
-started with.
+embeddings. Product Recommendations wraps a CLIP + ChromaDB +
+LLM-reranking search pipeline as a single tool so it fits the same agent
+shape as the others. Story Developer expands a one-line idea into a
+title/synopsis/characters/scene. Mystery Generator builds a crime case
+you have to solve — the solution lives in a hidden per-conversation file
+the agent writes but never quotes back until you guess or give up.
+Conversations for all four agents persist in a local SQLite file
+(`data/shonku.db`) — a chat survives a page refresh or a server restart,
+and each conversation is locked to the agent+source it started with.
 
 A cross-agent memory layer (`backend/memory/`) runs alongside every chat:
 after each turn, an LLM extracts durable facts about the user (name,
@@ -117,7 +114,7 @@ sync backend and local-first embeddings:
 
 At the start of every chat turn, the current agent's system prompt gets a
 `## Relevant memories about this user` block injected — scoped per agent: a fact
-learned in one Data Analyst conversation is recalled in any other Data Analyst
+learned in one Document Q&A conversation is recalled in any other Document Q&A
 conversation, but never surfaces in Story Developer or any other agent. Each
 memory is tagged with the conversation it came from too (for provenance), but
 recall isn't locked to that single conversation — it spans every conversation
@@ -133,7 +130,7 @@ vector-only memory; chat is unaffected either way. Needs `NEO4J_URI`,
 [neo4j.com/cloud/aura](https://neo4j.com/cloud/aura/)) to enable it.
 
 Nothing to run manually — this is wired into `/chat` automatically. No browser UI
-yet for viewing/deleting stored memories (see `PLAN.md`).
+yet for viewing/deleting stored memories (see [docs/PLAN.md](docs/PLAN.md)).
 
 ## Adding a Knowledge Base
 
@@ -167,12 +164,6 @@ backend/
       agent.py              # deepagents agent + KB retrieval tool
       router.py              # easy/hard model routing middleware (has an eval:
                               #   python -m backend.agents.docqa.router)
-    data_analyst/
-      agent.py              # deepagents supervisor + 4 subagents (analysis,
-                             #   SQL, viz, report-writing), no per-source rebuild
-                             #   needed beyond source binding in the system prompt
-      tools.py               # inspect/stats/correlations/outliers/SQL/python/charts
-      sql_pipeline.py          # NL-to-SQL: schema context, few-shot, CoT, self-correct
     recommendation/
       agent.py              # deepagents agent, ONE tool wrapping the whole pipeline
       embedding_service.py   # CLIP (open_clip), text/image -> 512-d vectors
@@ -193,15 +184,16 @@ backend/
     download_sec_10q.py          # SEC EDGAR -> data/raw/sec_10q/ (scratch)
     download_arxiv.py            # arXiv search -> data/raw/arxiv/<topic>/ (scratch)
   online_pipeline/
-    main.py   # FastAPI app: /agents, /kbs, /datasets, /uploads, /conversations,
-               # /chat, /charts/{filename}, /products/images/{filename}
+    main.py   # FastAPI app: /agents, /kbs, /conversations, /chat,
+               # /products/images/{filename}
 frontend/
   app.py        # Streamlit UI: agent picker -> source picker -> chat
+docs/
+  PLAN.md       # roadmap: done / next / production-readiness phases
+  CHANGELOG.md  # terse per-commit index, points back into PLAN.md for detail
 data/
   kbs/<slug>/            # KB source files + kb.yaml (ingested)
   raw/                   # scratch downloads, not ingested directly (gitignored)
-  uploads/               # CSV uploads for the Data Analyst agent (gitignored)
-  charts/                # generated chart PNGs, served via /charts/{filename} (gitignored)
   products/              # catalog.json + images/ + chroma_db/ (seeded, committed)
   mysteries/<conversation_id>/  # solution.md per mystery conversation (gitignored)
   chroma/                # generated: memory vector store (gitignored)
