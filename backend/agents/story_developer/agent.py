@@ -8,13 +8,17 @@ deepagents to match this codebase's stack. Stateless, like docqa
 
 import logging
 import os
+from pathlib import Path
 
 from deepagents import create_deep_agent
+from deepagents.backends import FilesystemBackend
 from langchain_openai import ChatOpenAI
 
 from backend.config import get_router_config
 
 logger = logging.getLogger(__name__)
+
+SKILLS_DIR = Path(__file__).resolve().parent / "skills"
 
 WRITER_PROMPT = (
     "You are a world-class screenwriter. Given the user's initial idea, develop a unique and "
@@ -58,7 +62,7 @@ Workflow for a first message:
 
 For later messages, treat them as feedback/revision requests and delegate to the editor subagent to apply
 the requested change, then present the updated material. Be concise and direct. Do not use file or shell
-tools."""
+tools yourself — the scene-director subagent has its own skill for scene formatting."""
 
 
 def get_model() -> ChatOpenAI:
@@ -88,9 +92,11 @@ def make_story_agent(memory_context: str = ""):
         {
             "name": "scene-director",
             "description": "Writes one pivotal scene (slugline, atmosphere, blocking, dialogue) from a concept.",
-            "system_prompt": SCENE_DIRECTOR_PROMPT,
+            "system_prompt": SCENE_DIRECTOR_PROMPT
+            + " You have a screenplay-formatting skill available — check it before writing the scene.",
             "tools": [],
             "model": model,
+            "skills": ["/"],
         },
         {
             "name": "editor",
@@ -105,4 +111,5 @@ def make_story_agent(memory_context: str = ""):
         model=model,
         subagents=subagents,
         system_prompt=system_prompt,
+        backend=FilesystemBackend(root_dir=str(SKILLS_DIR)),
     )

@@ -50,19 +50,3 @@ class QueryExpansion(BaseModel):
     expanded_query: str
     extracted_intent: dict
     search_filters: dict
-
-
-class RankedProduct(BaseModel):
-    product: Product
-    similarity_score: float  # from ChromaDB cosine distance
-    rerank_score: float      # from LLM reranking
-    match_reason: str        # LLM explanation
-
-
-class SearchResponse(BaseModel):
-    original_query: str
-    expanded_query: str
-    extracted_intent: dict
-    results: list[RankedProduct]
-    total_candidates: int
-    search_time_ms: float

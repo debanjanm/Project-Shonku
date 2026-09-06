@@ -19,7 +19,7 @@ from typing import Optional
 
 from neo4j import GraphDatabase
 
-from backend.memory.models import EntityType, GraphNode, GraphRelationship
+from backend.memory.models import GraphNode, GraphRelationship
 
 logger = logging.getLogger(__name__)
 
@@ -62,7 +62,7 @@ class Neo4jGraphStore:
         with self._session() as session:
             record = session.run(
                 query, id=entity.id, name=entity.name,
-                normalized_name=entity.normalized_name, entity_type=entity.entity_type.value,
+                normalized_name=entity.normalized_name, entity_type=entity.entity_type,
             ).single()
             return record["id"]
 
@@ -129,14 +129,10 @@ class Neo4jGraphStore:
             except Exception:
                 records = list(session.run(query_no_apoc, names=normalized))
 
-        nodes: list[GraphNode] = []
-        for rec in records:
-            try:
-                etype = EntityType(rec["entity_type"])
-            except ValueError:
-                etype = EntityType.UNKNOWN
-            nodes.append(GraphNode(id=rec["id"], name=rec["name"], entity_type=etype))
-        return nodes
+        return [
+            GraphNode(id=rec["id"], name=rec["name"], entity_type=rec["entity_type"] or "UNKNOWN")
+            for rec in records
+        ]
 
     def get_entity_memory_ids(self, entity_id: str) -> list[str]:
         query = "MATCH (m:MemoryRef)-[:MENTIONS]->(e:Entity {id: $entity_id}) RETURN m.memory_id AS memory_id"

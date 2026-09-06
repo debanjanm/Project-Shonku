@@ -22,3 +22,4 @@ Pillow
 huggingface_hub
 arxiv
 neo4j
+pytest

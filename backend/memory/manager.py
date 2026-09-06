@@ -8,7 +8,7 @@ import logging
 from backend.memory import pipeline
 from backend.memory.chroma_store import ChromaMemoryStore
 from backend.memory.models import (
-    EntityType, GraphNode, GraphRelationship, Memory, MemoryScope,
+    GraphNode, GraphRelationship, Memory, MemoryScope,
     MemoryUpdateResult, OperationType, ScoredMemory,
 )
 from backend.memory.neo4j_store import Neo4jGraphStore
@@ -155,7 +155,7 @@ class MemoryManager:
             for fact in facts:
                 for name in fact.entities:
                     if name not in all_entities:
-                        entity = GraphNode(name=name, entity_type=EntityType.UNKNOWN)
+                        entity = GraphNode(name=name)
                         entity.id = self._graph.upsert_entity(entity)
                         all_entities[name] = entity
 

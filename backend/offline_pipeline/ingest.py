@@ -14,6 +14,7 @@ import argparse
 import hashlib
 import json
 import logging
+import re
 import shutil
 import uuid
 from pathlib import Path
@@ -31,6 +32,13 @@ logger = logging.getLogger(__name__)
 
 MANIFEST_NAME = "manifest.json"
 SPLITTER = RecursiveCharacterTextSplitter(chunk_size=800, chunk_overlap=100)
+
+# Filings named "<YYYY> Q<N> <TICKER>" (download_sec_10q.py's convention) get
+# structured fiscal_year/fiscal_quarter metadata so retrieval can filter to
+# an exact period when the query names one — purely pattern-driven, not
+# gated on kb_slug, so any KB with this naming benefits and others are
+# untouched.
+_PERIOD_RE = re.compile(r"^(\d{4})\s+Q([1-4])\b", re.IGNORECASE)
 
 
 def _hash_file(path: Path) -> str:
@@ -60,6 +68,7 @@ def _split_file(kb: KnowledgeBase, relpath: str, path: Path) -> tuple[list[Docum
     docs = load_source_file(path)
     chunks = SPLITTER.split_documents(docs)
     ids = [uuid.uuid4().hex for _ in chunks]
+    period_match = _PERIOD_RE.match(path.stem)
     for i, (chunk, chunk_id) in enumerate(zip(chunks, ids)):
         chunk.metadata.update(
             {
@@ -69,6 +78,9 @@ def _split_file(kb: KnowledgeBase, relpath: str, path: Path) -> tuple[list[Docum
                 "doc_title": path.stem,
             }
         )
+        if period_match:
+            chunk.metadata["fiscal_year"] = int(period_match.group(1))
+            chunk.metadata["fiscal_quarter"] = int(period_match.group(2))
         # Prefix the embedded text with the document title so a chunk's own
         # embedding carries its document identity (e.g. "2026 Q1 AAPL") even
         # when the chunk's prose never restates it — otherwise exact-document
@@ -78,7 +90,7 @@ def _split_file(kb: KnowledgeBase, relpath: str, path: Path) -> tuple[list[Docum
     return chunks, ids
 
 
-def ingest_kb(kb: KnowledgeBase, *, rebuild: bool = False) -> None:
+def ingest_kb(kb: KnowledgeBase, *, rebuild: bool = False) -> dict:
     kb_dir = KB_DATA_DIR / kb.slug
     index_dir = INDEX_DIR / kb.slug
 
@@ -133,11 +145,17 @@ def ingest_kb(kb: KnowledgeBase, *, rebuild: bool = False) -> None:
         manifest["files"][relpath] = {"hash": current_hashes[relpath], "chunk_ids": ids}
 
     total_chunks = sum(len(f["chunk_ids"]) for f in manifest["files"].values())
+    summary = {
+        "new": new_count, "changed": changed_count,
+        "removed": removed_count, "unchanged": unchanged_count,
+        "total_chunks": total_chunks,
+    }
+
     if total_chunks == 0:
         if index_dir.exists():
             shutil.rmtree(index_dir)
         logger.warning("[%s] no ingestible content, skipped (removed stale index if any)", kb.slug)
-        return
+        return summary
 
     save_index(kb.slug, index)
     # BM25 has no incremental add/delete API, so it's always rebuilt in full
@@ -152,6 +170,7 @@ def ingest_kb(kb: KnowledgeBase, *, rebuild: bool = False) -> None:
         "[%s] new=%d changed=%d removed=%d unchanged=%d -> %d chunks",
         kb.slug, new_count, changed_count, removed_count, unchanged_count, total_chunks,
     )
+    return summary
 
 
 def main() -> None:

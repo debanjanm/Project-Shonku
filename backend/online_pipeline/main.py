@@ -9,7 +9,7 @@ import time
 from pathlib import Path
 
 from dotenv import load_dotenv
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, StreamingResponse
 from langchain_core.messages import AIMessageChunk
@@ -22,7 +22,11 @@ from backend.agents.docqa.agent import make_kb_agent  # noqa: E402
 from backend.agents.mystery_generator.agent import make_mystery_agent  # noqa: E402
 from backend.agents.recommendation.agent import make_recommendation_agent  # noqa: E402
 from backend.agents.story_developer.agent import make_story_agent  # noqa: E402
-from backend.kb import get_kb, list_knowledge_bases  # noqa: E402
+from backend.kb import (  # noqa: E402
+    create_kb, delete_kb, delete_kb_document, get_kb,
+    list_kb_documents, list_knowledge_bases, save_kb_document,
+)
+from backend.offline_pipeline.ingest import ingest_kb  # noqa: E402
 from backend.logging_config import configure_logging  # noqa: E402
 from backend.memory import get_memory_manager  # noqa: E402
 from backend.memory.models import MemoryScope  # noqa: E402
@@ -134,6 +138,71 @@ def list_agents():
 @app.get("/kbs")
 def list_kbs():
     return [{"slug": kb.slug, "name": kb.name, "description": kb.description} for kb in list_knowledge_bases()]
+
+
+class CreateKbRequest(BaseModel):
+    name: str
+    description: str = ""
+    slug: str | None = None
+
+
+@app.post("/kbs")
+def create_kb_endpoint(req: CreateKbRequest):
+    try:
+        kb = create_kb(req.name, req.description, req.slug)
+    except FileExistsError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"slug": kb.slug, "name": kb.name, "description": kb.description}
+
+
+@app.delete("/kbs/{slug}")
+def delete_kb_endpoint(slug: str):
+    try:
+        delete_kb(slug)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return {"ok": True}
+
+
+@app.get("/kbs/{slug}/documents")
+def list_kb_documents_endpoint(slug: str):
+    try:
+        return list_kb_documents(slug)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@app.post("/kbs/{slug}/documents")
+async def upload_kb_document_endpoint(slug: str, file: UploadFile = File(...)):
+    try:
+        filename = save_kb_document(slug, file.filename, await file.read())
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {"filename": filename}
+
+
+@app.delete("/kbs/{slug}/documents/{filename}")
+def delete_kb_document_endpoint(slug: str, filename: str):
+    try:
+        delete_kb_document(slug, filename)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return {"ok": True}
+
+
+@app.post("/kbs/{slug}/ingest")
+def ingest_kb_endpoint(slug: str):
+    try:
+        kb = get_kb(slug)
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return ingest_kb(kb)
 
 
 @app.post("/conversations")

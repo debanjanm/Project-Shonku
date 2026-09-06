@@ -9,8 +9,10 @@ instead of adding a non-agentic branch to /chat's streaming loop.
 
 import logging
 import os
+from pathlib import Path
 
 from deepagents import create_deep_agent
+from deepagents.backends import FilesystemBackend
 from langchain_core.tools import tool
 from langchain_openai import ChatOpenAI
 
@@ -22,6 +24,8 @@ from backend.config import get_router_config
 
 logger = logging.getLogger(__name__)
 
+SKILLS_DIR = Path(__file__).resolve().parent / "skills"
+
 TOP_K_CANDIDATES = 20
 TOP_K_RESULTS = 10
 
@@ -31,10 +35,17 @@ _BASE_SYSTEM_PROMPT = """You are the Project Shonku product recommendation assis
 Always call `search_products` with the user's question first. Present the results as a short list:
 product name, brand, price, and the match reason already provided by the tool — don't invent details
 not present in the tool output. Each result is tagged `[Image: filename]`; always keep that tag verbatim
-in your answer right after the product it belongs to, so the UI can render the image.
+in your answer right after the product it belongs to, so the UI can render the image. Each result is also
+tagged `[ID: product_id]` — that tag is for YOUR own reference only (e.g. to call `get_product_details` on
+a specific item the user follows up about), never show it to the user or mention it in your answer.
+
+If the user asks a follow-up about a *specific* previously-shown product (e.g. "does the second one come in
+blue?", "what's it made of?"), use `get_product_details` with that product's ID rather than searching again
+— a fresh search isn't guaranteed to return the same item.
 
 If no products match well, say so plainly instead of forcing a recommendation. Be concise and direct.
-Do not use file or shell tools."""
+Only use file tools to read a skill's full instructions when its description matches the task — never for
+anything else."""
 
 
 def get_model() -> ChatOpenAI:
@@ -48,7 +59,7 @@ def get_model() -> ChatOpenAI:
     )
 
 
-def _run_pipeline(query: str) -> list[dict]:
+def run_pipeline(query: str) -> list[dict]:
     """Text-only port of SearchPipeline.run(): expand -> embed -> retrieve -> rerank."""
     llm = LLMService()
     embedder = get_embedding_service()
@@ -73,11 +84,19 @@ def _run_pipeline(query: str) -> list[dict]:
     cosine_scores = {c["id"]: c["similarity_score"] for c in candidates}
 
     results = []
-    for item in reranked[:TOP_K_RESULTS]:
+    seen_ids = set()
+    for item in reranked:
+        if len(results) >= TOP_K_RESULTS:
+            break
         pid = item.get("id")
+        # The LLM's rerank JSON occasionally repeats an id — skip duplicates
+        # rather than showing the same product twice in one response.
+        if pid in seen_ids:
+            continue
         meta = meta_lookup.get(pid)
         if meta is None:
             continue
+        seen_ids.add(pid)
         product = Product.from_chroma_metadata(meta)
         results.append(
             {
@@ -99,7 +118,7 @@ def make_recommendation_agent(memory_context: str = ""):
     def search_products(query: str) -> str:
         """Search the product catalog for items matching the user's query."""
         logger.info("tool search_products called query=%r", query)
-        results = _run_pipeline(query)
+        results = run_pipeline(query)
         if not results:
             logger.warning("tool search_products found nothing query=%r", query)
             return "No matching products found in the catalog."
@@ -110,12 +129,32 @@ def make_recommendation_agent(memory_context: str = ""):
             lines.append(
                 f"- **{p.name}** ({p.brand}) — ${p.price:.2f}\n"
                 f"  Match: {r['match_reason']} (similarity {r['similarity_score']:.2f})\n"
-                f"  [Image: {p.image_filename}]"
+                f"  [Image: {p.image_filename}] [ID: {p.id}]"
             )
         return "\n\n".join(lines)
 
+    @tool
+    def get_product_details(product_id: str) -> str:
+        """Look up full details for one specific product by its ID (from a `[ID: ...]` tag in
+        prior search_products results) — use for a follow-up about a specific item instead of
+        searching again, since a fresh search isn't guaranteed to return the same product."""
+        logger.info("tool get_product_details called product_id=%r", product_id)
+        store = VectorStore()
+        product = store.get_product(product_id)
+        if product is None:
+            return f"No product found with ID {product_id}."
+        return (
+            f"**{product.name}** ({product.brand}) — ${product.price:.2f}\n"
+            f"Category: {product.category}\n"
+            f"Tags: {', '.join(product.tags)}\n"
+            f"Description: {product.description}\n"
+            f"[Image: {product.image_filename}]"
+        )
+
     return create_deep_agent(
         model=model,
-        tools=[search_products],
+        tools=[search_products, get_product_details],
         system_prompt=system_prompt,
+        backend=FilesystemBackend(root_dir=str(SKILLS_DIR)),
+        skills=["/"],
     )

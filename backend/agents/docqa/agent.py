@@ -2,8 +2,10 @@
 
 import logging
 import os
+from pathlib import Path
 
 from deepagents import create_deep_agent
+from deepagents.backends import FilesystemBackend
 from langchain.agents.middleware import ModelRequest, ModelResponse, wrap_model_call
 from langchain_core.messages import HumanMessage
 from langchain_core.tools import tool
@@ -11,9 +13,12 @@ from langchain_openai import ChatOpenAI
 
 from backend.agents.docqa.router import choose_model
 from backend.config import get_router_config
+from backend.kb import list_kb_documents
 from backend.retrieval import search
 
 logger = logging.getLogger(__name__)
+
+SKILLS_DIR = Path(__file__).resolve().parent / "skills"
 
 _BASE_SYSTEM_PROMPT = """You are the Project Shonku chat assistant. Answer the user's question using ONLY the
 `search_knowledge_base` tool's results as your source of truth for the currently selected knowledge base.
@@ -35,7 +40,8 @@ back is tagged `[Source: ...]` — when you state a fact from it, cite that exac
 right after, e.g. "18 days (Source: pto.md)". Only ever cite a source name that appears verbatim in a
 `[Source: ...]` tag from THIS turn's tool results — never invent, guess, or reuse a source name from memory
 or a different question. If a fact has no matching source tag, don't cite one for it. Be concise and direct.
-Do not use file or shell tools."""
+Only use file tools to read a skill's full instructions when its description matches the task — never for
+anything else."""
 
 
 def get_model(model_name: str) -> ChatOpenAI:
@@ -83,9 +89,19 @@ def make_kb_agent(kb_slug: str, memory_context: str = ""):
             passages.append(f"[Source: {source}]\n{doc.page_content}")
         return "\n\n---\n\n".join(passages)
 
+    @tool
+    def list_kb_documents_tool() -> str:
+        """List the documents/filings actually present in the currently selected knowledge base."""
+        docs = list_kb_documents(kb_slug)
+        if not docs:
+            return "This knowledge base has no documents."
+        return "\n".join(f"- {d['filename']}" for d in docs)
+
     return create_deep_agent(
         model=get_model(get_router_config().easy_model),  # default; route_model overrides per call
-        tools=[search_knowledge_base],
+        tools=[search_knowledge_base, list_kb_documents_tool],
         system_prompt=system_prompt,
         middleware=[route_model],
+        backend=FilesystemBackend(root_dir=str(SKILLS_DIR)),
+        skills=["/"],
     )

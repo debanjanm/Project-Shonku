@@ -28,11 +28,11 @@ class OperationType(str, Enum):
 @dataclass
 class MemoryScope:
     """Ownership/visibility scope of a memory. agent_id silos memory per
-    agent (a Document Q&A fact never surfaces in Story Developer) and IS
-    used to filter retrieval. run_id tags a memory with the conversation it
-    came from for provenance but is never used to filter retrieval — recall
-    spans every conversation with the same agent, not just the one a fact
-    was learned in."""
+    agent (a Document Q&A fact never surfaces in Story Developer) — see
+    to_filter() below, which does filter by it. run_id tags a memory with
+    the conversation it came from for provenance but is never used to
+    filter retrieval — recall spans every conversation with the same
+    agent, not just the one a fact was learned in."""
     user_id: str
     agent_id: Optional[str] = None
     run_id: Optional[str] = None
@@ -121,21 +121,13 @@ class MemoryUpdateResult:
         }
 
 
-class EntityType(str, Enum):
-    PERSON = "PERSON"
-    TOPIC = "TOPIC"
-    EVENT = "EVENT"
-    PREFERENCE = "PREFERENCE"
-    PLACE = "PLACE"
-    TOOL = "TOOL"
-    SKILL = "SKILL"
-    UNKNOWN = "UNKNOWN"
-
-
 @dataclass
 class GraphNode:
+    """entity_type is always "UNKNOWN" today — extraction only identifies entity
+    names, never classifies them (see pipeline.py's extraction schema). Kept as a
+    plain string, not an enum, since nothing has ever produced another value."""
     name: str
-    entity_type: EntityType = EntityType.UNKNOWN
+    entity_type: str = "UNKNOWN"
     id: Optional[str] = None
 
     def __post_init__(self):

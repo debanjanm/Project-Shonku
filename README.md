@@ -40,8 +40,18 @@ cp .env.example .env   # fill in OPENROUTER_API_KEY
 ```bash
 python -m backend.offline_pipeline.ingest              # build/update FAISS indexes from data/kbs
 uvicorn backend.online_pipeline.main:app --reload   # backend on :8000
-streamlit run frontend/app.py         # frontend on :8501
 ```
+
+Two frontends currently exist, both talk to the same backend on `:8000`:
+
+```bash
+streamlit run frontend/app.py         # Streamlit — the original, on :8501
+cd frontend-web && npm install && npm run dev   # Next.js — full parity, on :3000
+```
+
+`frontend-web/` (TypeScript, Tailwind, shadcn/ui) is the one being kept —
+`frontend/app.py` stays around only until it's had more real use. See
+`docs/PLAN.md`'s Done section for what was ported and verified.
 
 ## Ingestion (offline pipeline)
 
@@ -134,6 +144,11 @@ yet for viewing/deleting stored memories (see [docs/PLAN.md](docs/PLAN.md)).
 
 ## Adding a Knowledge Base
 
+Easiest: `frontend-web`'s **Knowledge Bases** tab — create, upload documents,
+click **Ingest now**, delete — no CLI needed.
+
+Or by hand:
+
 1. Create `data/kbs/<slug>/kb.yaml`:
    ```yaml
    name: My Knowledge Base
@@ -142,7 +157,8 @@ yet for viewing/deleting stored memories (see [docs/PLAN.md](docs/PLAN.md)).
 2. Drop source files (`.md`/`.txt`/`.pdf`/`.docx`) into `data/kbs/<slug>/`.
 3. Run `python -m backend.offline_pipeline.ingest --kb <slug>`.
 
-No code changes or backend restart needed — `/kbs` picks up new KBs live.
+No code changes or backend restart needed — `/kbs` picks up new KBs live
+either way.
 
 ## Project structure
 
@@ -184,10 +200,18 @@ backend/
     download_sec_10q.py          # SEC EDGAR -> data/raw/sec_10q/ (scratch)
     download_arxiv.py            # arXiv search -> data/raw/arxiv/<topic>/ (scratch)
   online_pipeline/
-    main.py   # FastAPI app: /agents, /kbs, /conversations, /chat,
-               # /products/images/{filename}
+    main.py   # FastAPI app: /agents, /kbs (+ CRUD: create/delete a KB,
+               # list/upload/delete its documents, trigger ingest),
+               # /conversations, /chat, /products/images/{filename}
 frontend/
-  app.py        # Streamlit UI: agent picker -> source picker -> chat
+  app.py        # Streamlit UI: agent picker -> source picker -> chat (being phased out)
+frontend-web/
+  app/          # Next.js app router: page.tsx (Suspense wrapper) -> chat-app.tsx (chat,
+                #   all state/logic), kbs/page.tsx (Knowledge Base admin tab)
+  components/   # agent-picker, source-picker, conversation-history, chat-messages, chat-input,
+                #   product-image-grid, top-nav, kb-list, kb-detail, kb-create-dialog,
+                #   ui/ (shadcn primitives)
+  lib/          # api.ts (fetch wrappers + the SSE streamChat() client), types.ts
 docs/
   PLAN.md       # roadmap: done / next / production-readiness phases
   CHANGELOG.md  # terse per-commit index, points back into PLAN.md for detail

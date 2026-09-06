@@ -16,6 +16,7 @@ from pathlib import Path
 
 from deepagents import create_deep_agent
 from deepagents.backends import FilesystemBackend
+from deepagents.backends.composite import CompositeBackend
 from langchain_openai import ChatOpenAI
 
 from backend.config import get_router_config
@@ -24,10 +25,12 @@ logger = logging.getLogger(__name__)
 
 ROOT = Path(__file__).resolve().parent.parent.parent.parent
 MYSTERIES_DIR = ROOT / "data" / "mysteries"
+SKILLS_DIR = Path(__file__).resolve().parent / "skills"
 
 PLANNER_PROMPT = (
     "You are a Planner Agent. Build a solvable crime blueprint with fields: victim, culprit, motive, "
-    "method, location, twist."
+    "method, location, twist. You have a fair-play-mystery-design skill available — check it before "
+    "finalizing the blueprint."
 )
 RESEARCHER_PROMPT = (
     "You are a Researcher Agent. Add plausible forensic notes, evidence, and red herrings while "
@@ -38,7 +41,8 @@ SCENARIST_PROMPT = (
     "suspects, evidence, and the true solution."
 )
 VALIDATOR_PROMPT = (
-    "You are a Validator Agent. Verify consistency, clue sufficiency, and uniqueness of the culprit."
+    "You are a Validator Agent. Verify consistency, clue sufficiency, and uniqueness of the culprit. "
+    "You have a fair-play-mystery-design skill available — use it as your verification checklist."
 )
 
 _BASE_SYSTEM_PROMPT = """You are the Project Shonku mystery game host. The user gives you a story idea or theme
@@ -95,13 +99,23 @@ def make_mystery_agent(conversation_id: int, memory_context: str = ""):
 
     case_dir = MYSTERIES_DIR / str(conversation_id)
     case_dir.mkdir(parents=True, exist_ok=True)
-    backend = FilesystemBackend(root_dir=str(case_dir), virtual_mode=True)
+    case_backend = FilesystemBackend(root_dir=str(case_dir), virtual_mode=True)
+
+    # Skills need a *stable* backend (the case-file one above is scoped to
+    # this one conversation) — read_file/ls are bound to whichever single
+    # backend the agent's FilesystemMiddleware uses, so a plain second
+    # backend would list skills correctly but fail to actually read them.
+    # CompositeBackend routes by path prefix instead: "solution.md" (no
+    # prefix) still goes to the per-conversation case backend, "/skills/..."
+    # goes to this agent's own stable skills/ dir — one backend, two roots.
+    skills_backend = FilesystemBackend(root_dir=str(SKILLS_DIR))
+    backend = CompositeBackend(default=case_backend, routes={"/skills/": skills_backend})
 
     subagents = [
-        {"name": "planner", "description": "Builds a solvable crime blueprint.", "system_prompt": PLANNER_PROMPT, "tools": [], "model": model},
+        {"name": "planner", "description": "Builds a solvable crime blueprint.", "system_prompt": PLANNER_PROMPT, "tools": [], "model": model, "skills": ["/skills/"]},
         {"name": "researcher", "description": "Adds forensic notes, evidence, and red herrings.", "system_prompt": RESEARCHER_PROMPT, "tools": [], "model": model},
         {"name": "scenarist", "description": "Expands blueprint + research into a full narrative case pack.", "system_prompt": SCENARIST_PROMPT, "tools": [], "model": model},
-        {"name": "validator", "description": "Verifies consistency, clue sufficiency, and culprit uniqueness.", "system_prompt": VALIDATOR_PROMPT, "tools": [], "model": model},
+        {"name": "validator", "description": "Verifies consistency, clue sufficiency, and culprit uniqueness.", "system_prompt": VALIDATOR_PROMPT, "tools": [], "model": model, "skills": ["/skills/"]},
     ]
 
     return create_deep_agent(
